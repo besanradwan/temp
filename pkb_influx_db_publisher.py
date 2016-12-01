@@ -9,76 +9,61 @@ flags.DEFINE_string(
 
 class InfluxDBPublisher(SamplePublishser):
 
-	def __init__(self, influx_uri=None, influx_db_name=None ):  #set to default above in flags unless changed
+	def __init__(self, influx_uri=None, influx_db_name=None):  #set to default above in flags unless changed
 		self.influx_uri = influx_uri
 		self.influx_db_name = influx_db_name
 
 
 	def PublishSamples(self, samples):
-		samples_constructed_body = ''
+		sample = list(samples)
+		final_sample = samples[-1]
+		samples = del samples[-1]
+		
 		for sample in samples:
-			type_of_test = sample['metric']
-			rwmixwrite = sample['rwmixwrite']
-			mean_bandwidth =sample['mean_bandwidth']
-			mean_latency = sample['mean_latency']
-			median_latency = sample['median_latency']
-			99th_p_latency = sample['99th_p_latency']
-			read_iops = sample['read_iops']
-			write_iops = sample['write_iops']
-			timestamp = (10**9)*(int(sample['timestamp'])) #converting seconds to nanoseconds
-			
-			sample_constructed_body = type_of_test + ',' + rwmixwrite + ',' +
-									  mean_bandwidth + ',' + mean_latency + ',' +
-									  mean_latency + ',' + median_latency + ',' +
-									  99th_p_latency + ',' + read_iops + ' ' +
-									  write_iops + ' ' + timestamp + '\n'				  
-			
-			samples_constructed_body = samples_constructed_body + sample
-
-		influx_db_exists = self._influxDBExists(influx_uri, influx_db_name)
-		if influx_db_exists == True:
-			write_data_status, write_data_response = self._writeData(influx_uri, influx_db_name)
-			if status == 204:
-				print('Success! Data Written')
-			else:
-				print(response, 'Request could not be completed due to: ', response)
+			sample['timestamp'] = self._FormatTimestampForInfluxDB(
+          			sample['timestamp']
+      		)
+      		samples_constructed_body = ''
+      		samples_constructed_body += (FormatSampleForInfluxDB(sample))
+      	samples_constructed_body += ' ' + final_sample
+							  		
+		create_db_status, create_db_response = self._createInfluxDB(influx_uri, influx_db_name)
+		
+		if create_db_status in (200, 202, 204):
+			print('Success!', influx_db_name, ' DB Created')
 		else:
-			create_db_status, create_db_response = self._createInfluxDB(influx_uri, influx_db_name)
-			if status == 204:
-				print('Success!', influx_db_name, ' DB Created')
-			else:
-				print(response, 'Request could not be completed due to: ', response)	
-			
-			self._writeData(influx_uri, influx_db_name)
+			print(response, 'Request could not be completed due to: ', create_db_response)	
+		
+		print('writing samples to publisher')
+		self._writeData(influx_uri, influx_db_name, samples_constructed_body)
 
+	
+	def FormatSampleForInfluxDB(sample):
+		for k, v in sample.iteritems():
+      			return k + '=' + v + ','
 
-	def _influxDBExists(influx_uri, influx_db_name):
-		conn = httplib.HTTPConnection(influx_uri + '/query')
-		conn.request('GET', '')
-		response = conn.getresponse()
-		response_status = response.status
-		response_response = response.response
-		if response_status == 204:
-			return True
-		else:
-			return False
+	def _FormatTimestampForInfluxDB(self, epoch_us): #converting seconds to nanoseconds
+		new_timestamp = (10**9)*(int(epoch_us))
+		return new_timestamp
 
 
 	def _createInfluxDB(influx_uri, influx_db_name):
-		params = urllib.urlencode({'CREATE DATABASE': influx_db_name})
-		conn = httplib.HTTPConnection(influx_uri + '/query')
-		conn.request('POST', '', params)
+		headers = {'Content-type': 'application/x-www-form-urlencoded', 'Accept': 'text/plain'}
+		params = urllib.urlencode({'q': 'CREATE DATABASE' + influx_db_name})
+		conn = httplib.HTTPConnection(influx_uri)
+		conn.request('POST', '/query?' + params, headers)
 		response = conn.getresponse()
 		response_status = response.status
 		response_response = response.response
 		return response_status, response_response
 
 
-	def _writeData(influx_uri, influx_db_name):
-		params = urllib.urlencode({'db': influx_db_name, 'data-binary': samples_constructed_body})
-		conn = httplib.HTTPConnection(influx_uri + '/write')
-		conn.request('POST', '', params)
+	def _writeData(influx_uri, influx_db_name, data):
+		params = data
+		conn = httplib.HTTPConnection(influx_uri)
+		conn.request('POST', '/write?' + 'db=' + influx_db_name, params)
 		response = conn.getresponse()
 		response_status = response.status
 		response_response = response.response
 		return response_status, response_response
+
